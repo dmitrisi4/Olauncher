@@ -9,6 +9,12 @@ import androidx.core.content.edit
 class Prefs(context: Context) {
     private val PREFS_FILENAME = "app.olauncher"
 
+    private val GEMINI_API_KEY = "GEMINI_API_KEY"
+    private val SSH_HOST = "SSH_HOST"
+    private val SSH_PORT = "SSH_PORT"
+    private val SSH_USER = "SSH_USER"
+    private val SSH_KEY = "SSH_KEY"
+
     private val FIRST_OPEN = "FIRST_OPEN"
     private val FIRST_OPEN_TIME = "FIRST_OPEN_TIME"
     private val FIRST_SETTINGS_OPEN = "FIRST_SETTINGS_OPEN"
@@ -186,6 +192,26 @@ class Prefs(context: Context) {
     var swipeLeftEnabled: Boolean
         get() = prefs.getBoolean(SWIPE_LEFT_ENABLED, true)
         set(value) = prefs.edit { putBoolean(SWIPE_LEFT_ENABLED, value).apply() }
+
+    var geminiApiKey: String
+        get() = prefs.getString(GEMINI_API_KEY, "").toString()
+        set(value) = prefs.edit { putString(GEMINI_API_KEY, value) }
+
+    var sshHost: String
+        get() = prefs.getString(SSH_HOST, "").toString()
+        set(value) = prefs.edit { putString(SSH_HOST, value) }
+
+    var sshPort: String
+        get() = prefs.getString(SSH_PORT, "22").toString()
+        set(value) = prefs.edit { putString(SSH_PORT, value) }
+
+    var sshUser: String
+        get() = prefs.getString(SSH_USER, "").toString()
+        set(value) = prefs.edit { putString(SSH_USER, value) }
+
+    var sshKey: String
+        get() = prefs.getString(SSH_KEY, "").toString()
+        set(value) = prefs.edit { putString(SSH_KEY, value) }
 
     var swipeRightEnabled: Boolean
         get() = prefs.getBoolean(SWIPE_RIGHT_ENABLED, true)

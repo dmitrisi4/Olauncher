@@ -26,6 +26,7 @@ import app.olauncher.R
 import app.olauncher.data.Constants
 import app.olauncher.data.Prefs
 import app.olauncher.databinding.FragmentSettingsBinding
+import androidx.core.widget.doAfterTextChanged
 import app.olauncher.helper.animateAlpha
 import app.olauncher.helper.appUsagePermissionGranted
 import app.olauncher.helper.getColorFromAttr
@@ -87,9 +88,24 @@ class SettingsFragment : Fragment(), View.OnClickListener, View.OnLongClickListe
         populateActionHints()
         initClickListeners()
         initObservers()
+        populateAISettings()
 
         if (showPentastic)
             binding.footer.text = getText(R.string.new_app_minimal_todo_lists)
+    }
+
+    private fun populateAISettings() {
+        binding.etGeminiApiKey?.setText(prefs.geminiApiKey)
+        binding.etSshHost?.setText(prefs.sshHost)
+        binding.etSshPort?.setText(prefs.sshPort)
+        binding.etSshUser?.setText(prefs.sshUser)
+        binding.etSshKey?.setText(prefs.sshKey)
+
+        binding.etGeminiApiKey?.doAfterTextChanged { prefs.geminiApiKey = it.toString().trim() }
+        binding.etSshHost?.doAfterTextChanged { prefs.sshHost = it.toString().trim() }
+        binding.etSshPort?.doAfterTextChanged { prefs.sshPort = it.toString().trim() }
+        binding.etSshUser?.doAfterTextChanged { prefs.sshUser = it.toString().trim() }
+        binding.etSshKey?.doAfterTextChanged { prefs.sshKey = it.toString().trim() }
     }
 
     override fun onClick(view: View) {

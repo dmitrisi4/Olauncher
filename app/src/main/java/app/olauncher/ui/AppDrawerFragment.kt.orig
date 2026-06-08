@@ -260,9 +260,6 @@ class AppDrawerFragment : Fragment() {
     private fun initObservers() {
         viewModel.firstOpen.observe(viewLifecycleOwner) {
         }
-        viewModel.chatSessions.observe(viewLifecycleOwner) {
-            updateCombinedAppList()
-        }
         if (flag == Constants.FLAG_HIDDEN_APPS) {
             viewModel.hiddenApps.observe(viewLifecycleOwner) {
                 it?.let {

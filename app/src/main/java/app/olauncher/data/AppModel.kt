@@ -38,6 +38,15 @@ sealed class AppModel : Comparable<AppModel> {
         override val isNew: Boolean = false
     }
 
+    data class ChatSessionModel(
+        val session: app.olauncher.data.chat.ChatSession,
+        override val appLabel: String = session.name,
+        override val key: CollationKey? = null,
+        override val appPackage: String = "",
+        override val user: UserHandle = android.os.Process.myUserHandle(),
+        override val isNew: Boolean = false
+    ) : AppModel()
+
     override fun compareTo(other: AppModel): Int = when {
         key != null && other.key != null -> key!!.compareTo(other.key)
         else -> appLabel.compareTo(other.appLabel, true)

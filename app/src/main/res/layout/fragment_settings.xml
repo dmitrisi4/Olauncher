@@ -940,6 +940,69 @@
                         android:padding="10dp"
                         android:text="@string/off" />
                 </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginTop="20dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/TextMedium"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="AI &amp; Terminal"
+                        android:textColor="?attr/primaryColor" />
+
+                    <EditText
+                        android:id="@+id/etGeminiApiKey"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/gemini_api_key"
+                        android:inputType="textPassword"
+                        android:paddingVertical="8dp" />
+
+                    <EditText
+                        android:id="@+id/etSshHost"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/ssh_host"
+                        android:inputType="textUri"
+                        android:paddingVertical="8dp" />
+
+                    <EditText
+                        android:id="@+id/etSshPort"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/ssh_port"
+                        android:inputType="number"
+                        android:paddingVertical="8dp" />
+
+                    <EditText
+                        android:id="@+id/etSshUser"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/ssh_user"
+                        android:inputType="textVisiblePassword"
+                        android:paddingVertical="8dp" />
+
+                    <EditText
+                        android:id="@+id/etSshKey"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/ssh_key"
+                        android:inputType="textMultiLine"
+                        android:minLines="1"
+                        android:maxLines="4"
+                        android:paddingVertical="8dp" />
+                </LinearLayout>
+
             </LinearLayout>
 
             <LinearLayout
