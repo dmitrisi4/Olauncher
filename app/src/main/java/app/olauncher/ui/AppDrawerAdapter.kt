@@ -41,6 +41,8 @@ class AppDrawerAdapter(
         const val VIEW_TYPE_APP = 0
         const val VIEW_TYPE_PRIVATE_HEADER = 1
 
+        const val VIEW_TYPE_CHAT_SESSION = 2
+
         val DIFF_CALLBACK = object : DiffUtil.ItemCallback<AppModel>() {
             override fun areItemsTheSame(oldItem: AppModel, newItem: AppModel): Boolean = when {
                 oldItem is AppModel.App && newItem is AppModel.App ->
@@ -50,6 +52,9 @@ class AppDrawerAdapter(
                     oldItem.shortcutId == newItem.shortcutId && oldItem.user == newItem.user
 
                 oldItem is AppModel.PrivateSpaceHeader && newItem is AppModel.PrivateSpaceHeader -> true
+
+                oldItem is AppModel.ChatSessionModel && newItem is AppModel.ChatSessionModel ->
+                    oldItem.session.id == newItem.session.id
 
                 else -> false
             }
@@ -70,6 +75,7 @@ class AppDrawerAdapter(
     override fun getItemViewType(position: Int): Int {
         return when (appFilteredList.getOrNull(position)) {
             is AppModel.PrivateSpaceHeader -> VIEW_TYPE_PRIVATE_HEADER
+            is AppModel.ChatSessionModel -> VIEW_TYPE_CHAT_SESSION
             else -> VIEW_TYPE_APP
         }
     }
@@ -79,6 +85,14 @@ class AppDrawerAdapter(
             VIEW_TYPE_PRIVATE_HEADER -> PrivateSpaceHeaderViewHolder(
                 AdapterPrivateSpaceHeaderBinding.inflate(
                     LayoutInflater.from(parent.context),
+                    parent,
+                    false
+                )
+            )
+
+            VIEW_TYPE_CHAT_SESSION -> ChatSessionViewHolder(
+                LayoutInflater.from(parent.context).inflate(
+                    R.layout.adapter_chat_session,
                     parent,
                     false
                 )
@@ -104,6 +118,15 @@ class AppDrawerAdapter(
                         appLabelGravity,
                         privateSpaceToggleListener,
                         privateSpaceSettingsListener,
+                    )
+                }
+
+                is ChatSessionViewHolder -> {
+                    holder.bind(
+                        appModel as AppModel.ChatSessionModel,
+                        appLabelGravity,
+                        appClickListener,
+                        appDeleteListener
                     )
                 }
 
@@ -134,7 +157,7 @@ class AppDrawerAdapter(
 
                 val appFilteredList = (if (charSearch.isNullOrBlank()) appsList
                 else appsList.filter { app ->
-                    app !is AppModel.PrivateSpaceHeader && appLabelMatches(app.appLabel, charSearch)
+                    app is AppModel.ChatSessionModel || (app !is AppModel.PrivateSpaceHeader && appLabelMatches(app.appLabel, charSearch))
                 } as MutableList<AppModel>)
 
                 val filterResults = FilterResults()
@@ -197,6 +220,39 @@ class AppDrawerAdapter(
     fun launchFirstInList() {
         val first = appFilteredList.firstOrNull { it !is AppModel.PrivateSpaceHeader }
         if (first != null) appClickListener(first)
+    }
+
+    class ChatSessionViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        private val title: android.widget.TextView = itemView.findViewById(R.id.sessionTitle)
+        private val deleteLayout: android.widget.LinearLayout = itemView.findViewById(R.id.sessionDeleteLayout)
+        private val deleteBtn: android.widget.TextView = itemView.findViewById(R.id.sessionDelete)
+        private val closeBtn: android.widget.TextView = itemView.findViewById(R.id.sessionMenuClose)
+
+        fun bind(
+            model: AppModel.ChatSessionModel,
+            appLabelGravity: Int,
+            clickListener: (AppModel) -> Unit,
+            deleteListener: (AppModel) -> Unit
+        ) {
+            title.text = model.session.name
+            title.gravity = appLabelGravity
+
+            deleteLayout.visibility = View.GONE
+            title.visibility = View.VISIBLE
+
+            title.setOnClickListener { clickListener(model) }
+            title.setOnLongClickListener {
+                title.visibility = View.INVISIBLE
+                deleteLayout.visibility = View.VISIBLE
+                true
+            }
+
+            deleteBtn.setOnClickListener { deleteListener(model) }
+            closeBtn.setOnClickListener {
+                deleteLayout.visibility = View.GONE
+                title.visibility = View.VISIBLE
+            }
+        }
     }
 
     class PrivateSpaceHeaderViewHolder(private val binding: AdapterPrivateSpaceHeaderBinding) :

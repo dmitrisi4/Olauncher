@@ -41,6 +41,9 @@ android {
         viewBinding = true
         buildConfig = true
     }
+    packagingOptions {
+        exclude 'META-INF/versions/9/OSGI-INF/MANIFEST.MF'
+    }
     namespace 'app.olauncher'
 }
 
@@ -63,5 +66,9 @@ dependencies {
 
     //Material dependency
     implementation libs.material
+
+    // SSH and JSON
+    implementation libs.jsch
+    implementation libs.gson
 
 }
