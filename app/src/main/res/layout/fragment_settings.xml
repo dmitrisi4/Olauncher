@@ -1063,16 +1063,6 @@
                     android:text="@string/privacy" />
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/footer"
-                style="@style/TextSmall"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:letterSpacing="0.03"
-                android:padding="12dp"
-                android:text="@string/new_app_note_safe" />
-
         </LinearLayout>
 
     </ScrollView>
