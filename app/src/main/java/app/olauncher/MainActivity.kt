@@ -385,8 +385,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             Constants.REQUEST_CODE_LAUNCHER_SELECTOR -> {
-                if (resultCode == Activity.RESULT_OK)
-                    resetLauncherViaFakeActivity()
+                // Do nothing, RoleManager already set it successfully
             }
         }
     }
