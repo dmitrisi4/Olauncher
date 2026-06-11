@@ -18,18 +18,21 @@ import app.olauncher.data.chat.ChatMessage
 import app.olauncher.data.chat.ChatRepository
 import app.olauncher.data.chat.ChatSession
 import app.olauncher.helper.hideKeyboard
-import com.jcraft.jsch.ChannelExec
+import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.JSch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
+import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 class ChatFragment : Fragment() {
 
@@ -42,6 +45,14 @@ class ChatFragment : Fragment() {
     private var sessionType: String? = null
     private var sessionName: String? = null
     private var requestInFlight = false
+
+    // Persistent SSH shell for this chat session: a single bash process keeps its
+    // state (cwd, env, exports) alive across commands.
+    private var sshSession: com.jcraft.jsch.Session? = null
+    private var sshChannel: ChannelShell? = null
+    private var sshWriter: OutputStream? = null
+    private var sshReader: BufferedReader? = null
+    private val sshCommandCounter = AtomicInteger(0)
 
     private lateinit var chatRecyclerView: RecyclerView
     private lateinit var chatInput: EditText
@@ -247,61 +258,97 @@ class ChatFragment : Fragment() {
 
         setSending(true)
         lifecycleScope.launch(Dispatchers.IO) {
-            var sshSession: com.jcraft.jsch.Session? = null
-            var channel: ChannelExec? = null
             try {
-                val jsch = JSch()
-                if (key.isNotEmpty()) {
-                    jsch.addIdentity("user_key", key.toByteArray(), null, null)
-                }
+                ensureShellConnected(host, port, user, key, password)
+                val writer = sshWriter ?: throw IOException("SSH shell is not connected")
+                val reader = sshReader ?: throw IOException("SSH shell is not connected")
 
-                sshSession = jsch.getSession(user, host, port)
-                if (password.isNotEmpty()) sshSession.setPassword(password)
-                sshSession.setConfig("StrictHostKeyChecking", "no")
-                sshSession.connect(Constants.Chat.SSH_TIMEOUT_MS)
+                // Send the command followed by a unique end-marker carrying the exit
+                // code, then read shell output until that marker appears.
+                val marker = "__OLR_END_${sshCommandCounter.incrementAndGet()}__"
+                writer.write((command + "\n").toByteArray(Charsets.UTF_8))
+                writer.write(("echo $marker\$?\n").toByteArray(Charsets.UTF_8))
+                writer.flush()
 
-                channel = sshSession.openChannel("exec") as ChannelExec
-                channel.setCommand(command)
-                channel.inputStream = null
-
-                val errStream = ByteArrayOutputStream()
-                channel.setErrStream(errStream)
-                val inStream = channel.inputStream
-
-                channel.connect(Constants.Chat.SSH_TIMEOUT_MS)
-
-                // Drain stdout while the command runs; stderr is pumped into errStream
-                // by JSch so reading only stdout here cannot deadlock.
                 val output = StringBuilder()
-                val buffer = ByteArray(1024)
+                var exitStatus = 0
                 while (true) {
-                    while (inStream.available() > 0) {
-                        val read = inStream.read(buffer, 0, buffer.size)
-                        if (read < 0) break
-                        output.append(String(buffer, 0, read, Charsets.UTF_8))
-                    }
-                    if (channel.isClosed) {
-                        if (inStream.available() > 0) continue
+                    val line = reader.readLine() ?: throw IOException("Connection closed")
+                    if (line.startsWith(marker)) {
+                        exitStatus = line.substring(marker.length).trim().toIntOrNull() ?: 0
                         break
                     }
-                    Thread.sleep(100)
+                    output.append(line).append('\n')
                 }
-
-                val errText = errStream.toString("UTF-8")
-                if (errText.isNotEmpty()) output.append(errText)
-                val exitStatus = channel.exitStatus
-                if (exitStatus > 0) output.append("\n[exit code $exitStatus]")
+                if (exitStatus != 0) output.append("[exit code $exitStatus]\n")
 
                 val result = output.toString().trim().ifEmpty { "[no output]" }
                 withContext(Dispatchers.Main) { addSystemMessage(result) }
             } catch (e: Exception) {
+                closeShell()
                 withContext(Dispatchers.Main) { addSystemMessage("SSH Error: ${e.message}") }
             } finally {
-                channel?.disconnect()
-                sshSession?.disconnect()
                 withContext(Dispatchers.Main) { setSending(false) }
             }
         }
+    }
+
+    /**
+     * Opens (once) a persistent shell channel so command state survives between
+     * messages. The PTY is disabled to avoid input echo and prompts, stderr is
+     * merged into stdout, and any login banner is drained up to a ready marker
+     * so later output parsing stays clean.
+     */
+    private fun ensureShellConnected(host: String, port: Int, user: String, key: String, password: String) {
+        if (sshChannel?.isConnected == true && sshSession?.isConnected == true) return
+        closeShell()
+
+        val jsch = JSch()
+        if (key.isNotEmpty()) jsch.addIdentity("user_key", key.toByteArray(), null, null)
+
+        val session = jsch.getSession(user, host, port)
+        if (password.isNotEmpty()) session.setPassword(password)
+        session.setConfig("StrictHostKeyChecking", "no")
+        session.connect(Constants.Chat.SSH_TIMEOUT_MS)
+
+        val channel = session.openChannel("shell") as ChannelShell
+        channel.setPty(false)
+        val writer = channel.outputStream
+        val reader = BufferedReader(InputStreamReader(channel.inputStream, Charsets.UTF_8))
+        channel.connect(Constants.Chat.SSH_TIMEOUT_MS)
+
+        writer.write("exec 2>&1\n".toByteArray(Charsets.UTF_8))
+        writer.write("echo __OLR_READY__\n".toByteArray(Charsets.UTF_8))
+        writer.flush()
+        while (true) {
+            val line = reader.readLine() ?: throw IOException("Connection closed during handshake")
+            if (line.contains("__OLR_READY__")) break
+        }
+
+        sshSession = session
+        sshChannel = channel
+        sshWriter = writer
+        sshReader = reader
+    }
+
+    private fun closeShell() {
+        val channel = sshChannel
+        val session = sshSession
+        sshChannel = null
+        sshSession = null
+        sshWriter = null
+        sshReader = null
+        if (channel != null || session != null) {
+            Thread {
+                try { channel?.disconnect() } catch (_: Exception) {}
+                try { session?.disconnect() } catch (_: Exception) {}
+            }.start()
+        }
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        closeShell()
     }
 
     private fun addAiMessage(text: String) {
