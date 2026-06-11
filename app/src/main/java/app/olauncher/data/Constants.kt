@@ -116,4 +116,15 @@ object Constants {
     const val DIGITAL_WELLBEING_SAMSUNG_PACKAGE_NAME = "com.samsung.android.forest"
     const val DIGITAL_WELLBEING_SAMSUNG_ACTIVITY = "com.samsung.android.forest.launcher.LauncherActivity"
     const val WALLPAPER_WORKER_NAME = "WALLPAPER_WORKER_NAME"
+
+    object Chat {
+        const val TYPE_AI = "ai"
+        const val TYPE_SSH = "ssh"
+        const val GEMINI_MODEL = "gemini-2.0-flash"
+        const val GEMINI_ENDPOINT =
+            "https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent"
+        const val HISTORY_CONTEXT_LIMIT = 20
+        const val SSH_DEFAULT_PORT = 22
+        const val SSH_TIMEOUT_MS = 5000
+    }
 }
