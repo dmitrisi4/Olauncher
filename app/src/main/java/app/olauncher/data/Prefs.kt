@@ -203,7 +203,7 @@ class Prefs(context: Context) {
         set(value) = prefs.edit { putString(SSH_HOST, value) }
 
     var sshPort: String
-        get() = prefs.getString(SSH_PORT, "22").toString()
+        get() = prefs.getString(SSH_PORT, "").toString()
         set(value) = prefs.edit { putString(SSH_PORT, value) }
 
     var sshUser: String
