@@ -13,7 +13,10 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.widget.EditText
+import android.widget.PopupMenu
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.bundleOf
 import androidx.core.view.isVisible
@@ -25,6 +28,7 @@ import app.olauncher.MainViewModel
 import app.olauncher.R
 import app.olauncher.data.Constants
 import app.olauncher.data.Prefs
+import app.olauncher.data.chat.AiProviders
 import app.olauncher.databinding.FragmentSettingsBinding
 import androidx.core.widget.doAfterTextChanged
 import app.olauncher.helper.animateAlpha
@@ -92,19 +96,89 @@ class SettingsFragment : Fragment(), View.OnClickListener, View.OnLongClickListe
     }
 
     private fun populateAISettings() {
-        binding.etGeminiApiKey?.setText(prefs.geminiApiKey)
         binding.etSshHost?.setText(prefs.sshHost)
         binding.etSshPort?.setText(prefs.sshPort)
         binding.etSshUser?.setText(prefs.sshUser)
         binding.etSshPassword?.setText(prefs.sshPassword)
         binding.etSshKey?.setText(prefs.sshKey)
 
-        binding.etGeminiApiKey?.doAfterTextChanged { prefs.geminiApiKey = it.toString().trim() }
         binding.etSshHost?.doAfterTextChanged { prefs.sshHost = it.toString().trim() }
         binding.etSshPort?.doAfterTextChanged { prefs.sshPort = it.toString().trim() }
         binding.etSshUser?.doAfterTextChanged { prefs.sshUser = it.toString().trim() }
         binding.etSshPassword?.doAfterTextChanged { prefs.sshPassword = it.toString() }
         binding.etSshKey?.doAfterTextChanged { prefs.sshKey = it.toString().trim() }
+
+        refreshAiProviderUi()
+        binding.tvAiProvider?.setOnClickListener { showAiProviderMenu() }
+        binding.tvAiModel?.setOnClickListener { showAiModelMenu() }
+        binding.tvGetApiKey?.setOnClickListener {
+            requireContext().openUrl(AiProviders.byId(prefs.aiProviderId).keysUrl)
+        }
+        binding.etAiApiKey?.doAfterTextChanged {
+            prefs.setAiApiKey(prefs.aiProviderId, it.toString().trim())
+        }
+    }
+
+    private fun refreshAiProviderUi() {
+        val provider = AiProviders.byId(prefs.aiProviderId)
+        val model = prefs.aiModel.ifEmpty { provider.defaultModels.firstOrNull().orEmpty() }
+        binding.tvAiProvider?.text = getString(R.string.ai_provider_label, provider.displayName)
+        binding.tvAiModel?.text = getString(R.string.ai_model_label, model)
+        binding.etAiApiKey?.hint = getString(R.string.ai_api_key_hint, provider.displayName)
+        binding.etAiApiKey?.setText(prefs.aiApiKey(provider.id))
+    }
+
+    private fun showAiProviderMenu() {
+        val anchor = binding.tvAiProvider ?: return
+        val popup = PopupMenu(requireContext(), anchor)
+        AiProviders.ALL.forEachIndexed { index, provider ->
+            popup.menu.add(0, index, index, provider.displayName)
+        }
+        popup.setOnMenuItemClickListener { item ->
+            val provider = AiProviders.ALL[item.itemId]
+            prefs.aiProviderId = provider.id
+            prefs.aiModel = provider.defaultModels.firstOrNull().orEmpty()
+            refreshAiProviderUi()
+            true
+        }
+        popup.show()
+    }
+
+    private fun showAiModelMenu() {
+        val anchor = binding.tvAiModel ?: return
+        val provider = AiProviders.byId(prefs.aiProviderId)
+        val popup = PopupMenu(requireContext(), anchor)
+        provider.defaultModels.forEachIndexed { index, model ->
+            popup.menu.add(0, index, index, model)
+        }
+        val customId = provider.defaultModels.size
+        popup.menu.add(0, customId, customId, getString(R.string.ai_model_custom))
+        popup.setOnMenuItemClickListener { item ->
+            if (item.itemId == customId) {
+                showCustomModelDialog()
+            } else {
+                prefs.aiModel = provider.defaultModels[item.itemId]
+                refreshAiProviderUi()
+            }
+            true
+        }
+        popup.show()
+    }
+
+    private fun showCustomModelDialog() {
+        val input = EditText(requireContext()).apply {
+            setText(prefs.aiModel)
+            setSingleLine()
+        }
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.ai_model_custom)
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                prefs.aiModel = input.text.toString().trim()
+                refreshAiProviderUi()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     override fun onClick(view: View) {

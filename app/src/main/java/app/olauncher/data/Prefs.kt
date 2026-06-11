@@ -10,6 +10,9 @@ class Prefs(context: Context) {
     private val PREFS_FILENAME = "app.olauncher"
 
     private val GEMINI_API_KEY = "GEMINI_API_KEY"
+    private val AI_PROVIDER_ID = "AI_PROVIDER_ID"
+    private val AI_MODEL = "AI_MODEL"
+    private val AI_API_KEY_PREFIX = "AI_API_KEY_"
     private val SSH_HOST = "SSH_HOST"
     private val SSH_PORT = "SSH_PORT"
     private val SSH_USER = "SSH_USER"
@@ -197,6 +200,27 @@ class Prefs(context: Context) {
     var geminiApiKey: String
         get() = prefs.getString(GEMINI_API_KEY, "").toString()
         set(value) = prefs.edit { putString(GEMINI_API_KEY, value) }
+
+    var aiProviderId: String
+        get() = prefs.getString(AI_PROVIDER_ID, "gemini").toString()
+        set(value) = prefs.edit { putString(AI_PROVIDER_ID, value) }
+
+    var aiModel: String
+        get() = prefs.getString(AI_MODEL, "").toString()
+        set(value) = prefs.edit { putString(AI_MODEL, value) }
+
+    // Per-provider API keys. The legacy single Gemini key is used as a fallback
+    // so existing users keep working after the multi-provider migration.
+    fun aiApiKey(providerId: String): String {
+        val stored = prefs.getString(AI_API_KEY_PREFIX + providerId, "").orEmpty()
+        if (stored.isNotEmpty()) return stored
+        return if (providerId == "gemini") geminiApiKey else ""
+    }
+
+    fun setAiApiKey(providerId: String, value: String) {
+        prefs.edit { putString(AI_API_KEY_PREFIX + providerId, value) }
+        if (providerId == "gemini") geminiApiKey = value
+    }
 
     var sshHost: String
         get() = prefs.getString(SSH_HOST, "").toString()

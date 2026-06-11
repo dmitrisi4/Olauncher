@@ -120,11 +120,10 @@ object Constants {
     object Chat {
         const val TYPE_AI = "ai"
         const val TYPE_SSH = "ssh"
-        const val GEMINI_MODEL = "gemini-2.0-flash"
-        const val GEMINI_ENDPOINT =
-            "https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent"
         const val HISTORY_CONTEXT_LIMIT = 20
         const val SSH_DEFAULT_PORT = 22
         const val SSH_TIMEOUT_MS = 5000
+        const val SSH_COMMAND_TIMEOUT_MS = 60000L
+        const val SSH_MAX_OUTPUT_BYTES = 65536
     }
 }

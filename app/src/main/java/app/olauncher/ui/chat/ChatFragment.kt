@@ -14,6 +14,8 @@ import androidx.recyclerview.widget.RecyclerView
 import app.olauncher.R
 import app.olauncher.data.Constants
 import app.olauncher.data.Prefs
+import app.olauncher.data.chat.AiClient
+import app.olauncher.data.chat.AiProviders
 import app.olauncher.data.chat.ChatMessage
 import app.olauncher.data.chat.ChatRepository
 import app.olauncher.data.chat.ChatSession
@@ -21,16 +23,13 @@ import app.olauncher.helper.hideKeyboard
 import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.JSch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStreamReader
+import java.io.InputStream
 import java.io.OutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -45,13 +44,15 @@ class ChatFragment : Fragment() {
     private var sessionType: String? = null
     private var sessionName: String? = null
     private var requestInFlight = false
+    private var inFlightJob: Job? = null
 
     // Persistent SSH shell for this chat session: a single bash process keeps its
     // state (cwd, env, exports) alive across commands.
     private var sshSession: com.jcraft.jsch.Session? = null
     private var sshChannel: ChannelShell? = null
     private var sshWriter: OutputStream? = null
-    private var sshReader: BufferedReader? = null
+    private var sshInput: InputStream? = null
+    private var sshWasConnected = false
     private val sshCommandCounter = AtomicInteger(0)
 
     private lateinit var chatRecyclerView: RecyclerView
@@ -100,6 +101,10 @@ class ChatFragment : Fragment() {
         adapter.setMessages(session.messages)
 
         chatSend.setOnClickListener {
+            if (requestInFlight) {
+                cancelInFlight()
+                return@setOnClickListener
+            }
             val text = chatInput.text.toString().trim()
             if (text.isNotEmpty()) {
                 sendMessage(text)
@@ -142,101 +147,44 @@ class ChatFragment : Fragment() {
 
     private fun setSending(sending: Boolean) {
         requestInFlight = sending
-        chatSend.isEnabled = !sending
-        chatSend.text = getString(if (sending) R.string.chat_sending else R.string.chat_send)
+        // While a request is in flight the Send button doubles as a Stop button.
+        chatSend.text = getString(if (sending) R.string.chat_stop else R.string.chat_send)
+    }
+
+    private fun cancelInFlight() {
+        inFlightJob?.cancel()
+        closeShell()
+        addSystemMessage("[cancelled]")
+        setSending(false)
     }
 
     private fun sendAiRequest() {
-        val apiKey = prefs.geminiApiKey
+        val provider = AiProviders.byId(prefs.aiProviderId)
+        val model = prefs.aiModel.ifEmpty { provider.defaultModels.firstOrNull().orEmpty() }
+        val apiKey = prefs.aiApiKey(provider.id)
+
         if (apiKey.isEmpty()) {
-            addSystemMessage("Error: Gemini API Key is missing. Please configure it in settings.")
+            addSystemMessage("Error: ${provider.displayName} API key is missing. Please configure it in settings.")
+            return
+        }
+        if (model.isEmpty()) {
+            addSystemMessage("Error: No model selected. Please pick one in settings.")
             return
         }
 
         setSending(true)
-        lifecycleScope.launch(Dispatchers.IO) {
-            var connection: HttpURLConnection? = null
+        inFlightJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val url = URL(Constants.Chat.GEMINI_ENDPOINT)
-                connection = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json")
-                    setRequestProperty("x-goog-api-key", apiKey)
-                    doOutput = true
-                }
-
-                val body = JSONObject().put("contents", buildAiContext()).toString()
-                connection.outputStream.use { os ->
-                    os.write(body.toByteArray(Charsets.UTF_8))
-                }
-
-                val responseCode = connection.responseCode
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    val responseStr = InputStreamReader(connection.inputStream, Charsets.UTF_8).use { it.readText() }
-                    val text = JSONObject(responseStr)
-                        .getJSONArray("candidates")
-                        .getJSONObject(0)
-                        .getJSONObject("content")
-                        .getJSONArray("parts")
-                        .getJSONObject(0)
-                        .getString("text")
-
-                    withContext(Dispatchers.Main) { addAiMessage(text) }
-                } else {
-                    val errorBody = connection.errorStream?.let {
-                        InputStreamReader(it, Charsets.UTF_8).use { reader -> reader.readText() }
-                    }
-                    val message = parseApiError(errorBody) ?: "HTTP $responseCode"
-                    withContext(Dispatchers.Main) { addSystemMessage("Error: $message") }
-                }
+                val history = session.messages
+                    .filter { it.sender != "system" }
+                    .takeLast(Constants.Chat.HISTORY_CONTEXT_LIMIT)
+                val reply = AiClient.complete(provider, model, apiKey, history)
+                withContext(Dispatchers.Main) { addAiMessage(reply) }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { addSystemMessage("Error: ${e.message}") }
             } finally {
-                connection?.disconnect()
                 withContext(Dispatchers.Main) { setSending(false) }
             }
-        }
-    }
-
-    /**
-     * Builds Gemini contents with alternating user/model roles. Consecutive
-     * messages from the same role are merged (rather than dropped) so the latest
-     * user prompt is always included, and any leading model turns are trimmed
-     * because Gemini requires the conversation to start with a user turn.
-     */
-    private fun buildAiContext(): JSONArray {
-        val raw = session.messages
-            .filter { it.sender != "system" }
-            .takeLast(Constants.Chat.HISTORY_CONTEXT_LIMIT)
-
-        val merged = mutableListOf<Pair<String, String>>()
-        for (msg in raw) {
-            val role = if (msg.sender == "user") "user" else "model"
-            val last = merged.lastOrNull()
-            if (last != null && last.first == role) {
-                merged[merged.size - 1] = role to (last.second + "\n" + msg.text)
-            } else {
-                merged.add(role to msg.text)
-            }
-        }
-        while (merged.isNotEmpty() && merged.first().first == "model") {
-            merged.removeAt(0)
-        }
-
-        val contents = JSONArray()
-        for ((role, text) in merged) {
-            val parts = JSONArray().put(JSONObject().put("text", text))
-            contents.put(JSONObject().put("role", role).put("parts", parts))
-        }
-        return contents
-    }
-
-    private fun parseApiError(body: String?): String? {
-        if (body.isNullOrEmpty()) return null
-        return try {
-            JSONObject(body).getJSONObject("error").getString("message")
-        } catch (e: Exception) {
-            null
         }
     }
 
@@ -257,33 +205,30 @@ class ChatFragment : Fragment() {
         }
 
         setSending(true)
-        lifecycleScope.launch(Dispatchers.IO) {
+        inFlightJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             try {
+                // Note a reconnect (state lost) only if we had a live shell before.
+                val reconnected = sshWasConnected && !isShellConnected()
                 ensureShellConnected(host, port, user, key, password)
                 val writer = sshWriter ?: throw IOException("SSH shell is not connected")
-                val reader = sshReader ?: throw IOException("SSH shell is not connected")
+                val input = sshInput ?: throw IOException("SSH shell is not connected")
 
-                // Send the command followed by a unique end-marker carrying the exit
-                // code, then read shell output until that marker appears.
+                // Send the command followed by a unique end-marker that also carries
+                // the exit code; output is everything up to that marker.
+                val channel = sshChannel ?: throw IOException("SSH shell is not connected")
                 val marker = "__OLR_END_${sshCommandCounter.incrementAndGet()}__"
                 writer.write((command + "\n").toByteArray(Charsets.UTF_8))
                 writer.write(("echo $marker\$?\n").toByteArray(Charsets.UTF_8))
                 writer.flush()
 
-                val output = StringBuilder()
-                var exitStatus = 0
-                while (true) {
-                    val line = reader.readLine() ?: throw IOException("Connection closed")
-                    if (line.startsWith(marker)) {
-                        exitStatus = line.substring(marker.length).trim().toIntOrNull() ?: 0
-                        break
-                    }
-                    output.append(line).append('\n')
+                val result = readCommandOutput(input, channel, marker)
+                val text = buildString {
+                    if (reconnected) append("[reconnected — cwd/env reset]\n")
+                    append(result.output.trim().ifEmpty { "[no output]" })
+                    if (result.truncated) append("\n[output truncated]")
+                    if (result.exitStatus != 0) append("\n[exit code ${result.exitStatus}]")
                 }
-                if (exitStatus != 0) output.append("[exit code $exitStatus]\n")
-
-                val result = output.toString().trim().ifEmpty { "[no output]" }
-                withContext(Dispatchers.Main) { addSystemMessage(result) }
+                withContext(Dispatchers.Main) { addSystemMessage(text) }
             } catch (e: Exception) {
                 closeShell()
                 withContext(Dispatchers.Main) { addSystemMessage("SSH Error: ${e.message}") }
@@ -293,42 +238,157 @@ class ChatFragment : Fragment() {
         }
     }
 
+    private data class CommandResult(val output: String, val exitStatus: Int, val truncated: Boolean)
+
+    /**
+     * Reads raw bytes from the shell until the [marker] is seen, then parses the
+     * exit code that follows it. Uses non-blocking polling so a stuck or
+     * never-terminating command hits [Constants.Chat.SSH_COMMAND_TIMEOUT_MS]
+     * instead of hanging forever. Output is capped at
+     * [Constants.Chat.SSH_MAX_OUTPUT_BYTES] to protect against runaway commands.
+     */
+    private fun readCommandOutput(input: InputStream, channel: ChannelShell, marker: String): CommandResult {
+        val markerBytes = marker.toByteArray(Charsets.US_ASCII)
+        val lps = computeLps(markerBytes)
+        val output = ByteArrayOutputStream()
+        // Hold back the last markerBytes.size bytes so the marker itself never
+        // reaches the output buffer.
+        val pending = ArrayDeque<Byte>(markerBytes.size + 1)
+        var matched = 0
+        var truncated = false
+        val deadline = System.currentTimeMillis() + Constants.Chat.SSH_COMMAND_TIMEOUT_MS
+
+        while (true) {
+            val b = readByte(input, channel, deadline)
+            when (b) {
+                READ_TIMEOUT -> throw IOException("command timed out after ${Constants.Chat.SSH_COMMAND_TIMEOUT_MS / 1000}s")
+                READ_CLOSED -> throw IOException("Connection closed")
+            }
+            val byte = b.toByte()
+
+            while (matched > 0 && byte != markerBytes[matched]) matched = lps[matched - 1]
+            if (byte == markerBytes[matched]) matched++
+
+            pending.addLast(byte)
+            if (matched == markerBytes.size) {
+                repeat(markerBytes.size) { pending.removeLast() }
+                while (pending.isNotEmpty()) appendCapped(output, pending.removeFirst()) { truncated = true }
+                break
+            }
+            while (pending.size > markerBytes.size) {
+                appendCapped(output, pending.removeFirst()) { truncated = true }
+            }
+        }
+
+        val exitStatus = readExitCode(input, channel, deadline)
+        return CommandResult(output.toString("UTF-8"), exitStatus, truncated)
+    }
+
+    /** Knuth-Morris-Pratt longest-proper-prefix-suffix table for marker matching. */
+    private fun computeLps(pattern: ByteArray): IntArray {
+        val lps = IntArray(pattern.size)
+        var len = 0
+        var i = 1
+        while (i < pattern.size) {
+            if (pattern[i] == pattern[len]) {
+                len++
+                lps[i] = len
+                i++
+            } else if (len != 0) {
+                len = lps[len - 1]
+            } else {
+                lps[i] = 0
+                i++
+            }
+        }
+        return lps
+    }
+
+    private inline fun appendCapped(output: ByteArrayOutputStream, byte: Byte, onTruncated: () -> Unit) {
+        if (output.size() < Constants.Chat.SSH_MAX_OUTPUT_BYTES) {
+            output.write(byte.toInt())
+        } else {
+            onTruncated()
+        }
+    }
+
+    private fun readExitCode(input: InputStream, channel: ChannelShell, deadline: Long): Int {
+        val sb = StringBuilder()
+        while (true) {
+            val b = readByte(input, channel, deadline)
+            if (b == READ_TIMEOUT || b == READ_CLOSED) break
+            if (b == '\n'.code) break
+            if (b != '\r'.code) sb.append(b.toChar())
+        }
+        return sb.toString().trim().toIntOrNull() ?: 0
+    }
+
+    /** Returns the next byte, or [READ_TIMEOUT]/[READ_CLOSED] sentinels. */
+    private fun readByte(input: InputStream, channel: ChannelShell, deadline: Long): Int {
+        while (true) {
+            if (input.available() > 0) return input.read()
+            if (!channel.isConnected) return READ_CLOSED
+            if (System.currentTimeMillis() > deadline) return READ_TIMEOUT
+            Thread.sleep(20)
+        }
+    }
+
+    private fun isShellConnected(): Boolean =
+        sshChannel?.isConnected == true && sshSession?.isConnected == true
+
     /**
      * Opens (once) a persistent shell channel so command state survives between
-     * messages. The PTY is disabled to avoid input echo and prompts, stderr is
-     * merged into stdout, and any login banner is drained up to a ready marker
-     * so later output parsing stays clean.
+     * messages. The PTY is disabled to avoid input echo and prompts, the shell
+     * is forced to /bin/sh for predictable behaviour, stderr is merged into
+     * stdout, and any login banner is drained up to a ready marker.
      */
     private fun ensureShellConnected(host: String, port: Int, user: String, key: String, password: String) {
-        if (sshChannel?.isConnected == true && sshSession?.isConnected == true) return
+        if (isShellConnected()) return
         closeShell()
 
         val jsch = JSch()
-        if (key.isNotEmpty()) jsch.addIdentity("user_key", key.toByteArray(), null, null)
+        if (key.isNotEmpty()) {
+            val passphrase = if (password.isNotEmpty()) password.toByteArray(Charsets.UTF_8) else null
+            jsch.addIdentity("user_key", key.toByteArray(), null, passphrase)
+        }
 
         val session = jsch.getSession(user, host, port)
-        if (password.isNotEmpty()) session.setPassword(password)
+        if (key.isEmpty() && password.isNotEmpty()) session.setPassword(password)
         session.setConfig("StrictHostKeyChecking", "no")
         session.connect(Constants.Chat.SSH_TIMEOUT_MS)
 
         val channel = session.openChannel("shell") as ChannelShell
         channel.setPty(false)
         val writer = channel.outputStream
-        val reader = BufferedReader(InputStreamReader(channel.inputStream, Charsets.UTF_8))
+        val input = channel.inputStream
         channel.connect(Constants.Chat.SSH_TIMEOUT_MS)
 
+        writer.write("exec /bin/sh\n".toByteArray(Charsets.UTF_8))
         writer.write("exec 2>&1\n".toByteArray(Charsets.UTF_8))
         writer.write("echo __OLR_READY__\n".toByteArray(Charsets.UTF_8))
         writer.flush()
-        while (true) {
-            val line = reader.readLine() ?: throw IOException("Connection closed during handshake")
-            if (line.contains("__OLR_READY__")) break
-        }
+        val handshakeDeadline = System.currentTimeMillis() + Constants.Chat.SSH_TIMEOUT_MS
+        readUntil(input, channel, "__OLR_READY__", handshakeDeadline)
 
         sshSession = session
         sshChannel = channel
         sshWriter = writer
-        sshReader = reader
+        sshInput = input
+        sshWasConnected = true
+    }
+
+    private fun readUntil(input: InputStream, channel: ChannelShell, marker: String, deadline: Long) {
+        val markerBytes = marker.toByteArray(Charsets.US_ASCII)
+        val lps = computeLps(markerBytes)
+        var matched = 0
+        while (matched < markerBytes.size) {
+            val b = readByte(input, channel, deadline)
+            if (b == READ_TIMEOUT) throw IOException("timed out during handshake")
+            if (b == READ_CLOSED) throw IOException("Connection closed during handshake")
+            val byte = b.toByte()
+            while (matched > 0 && byte != markerBytes[matched]) matched = lps[matched - 1]
+            if (byte == markerBytes[matched]) matched++
+        }
     }
 
     private fun closeShell() {
@@ -337,7 +397,7 @@ class ChatFragment : Fragment() {
         sshChannel = null
         sshSession = null
         sshWriter = null
-        sshReader = null
+        sshInput = null
         if (channel != null || session != null) {
             Thread {
                 try { channel?.disconnect() } catch (_: Exception) {}
@@ -365,5 +425,10 @@ class ChatFragment : Fragment() {
         adapter.addMessage(msg)
         chatRecyclerView.scrollToPosition(adapter.itemCount - 1)
         chatRepository.saveSession(session)
+    }
+
+    companion object {
+        private const val READ_TIMEOUT = -2
+        private const val READ_CLOSED = -1
     }
 }

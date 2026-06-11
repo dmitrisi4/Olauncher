@@ -955,14 +955,39 @@
                         android:text="AI &amp; Terminal"
                         android:textColor="?attr/primaryColor" />
 
+                    <TextView
+                        android:id="@+id/tvAiProvider"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingVertical="8dp"
+                        android:text="@string/ai_provider_label" />
+
+                    <TextView
+                        android:id="@+id/tvAiModel"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingVertical="8dp"
+                        android:text="@string/ai_model_label" />
+
                     <EditText
-                        android:id="@+id/etGeminiApiKey"
+                        android:id="@+id/etAiApiKey"
                         style="@style/TextSmall"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:hint="@string/gemini_api_key"
                         android:inputType="textPassword"
                         android:paddingVertical="8dp" />
+
+                    <TextView
+                        android:id="@+id/tvGetApiKey"
+                        style="@style/TextSmall"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:paddingVertical="8dp"
+                        android:text="@string/ai_get_api_key"
+                        android:textColor="?attr/primaryColor" />
 
                     <EditText
                         android:id="@+id/etSshHost"
