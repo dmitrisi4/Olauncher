@@ -1,6 +1,7 @@
 package app.olauncher.data
 
 import android.os.UserHandle
+import app.olauncher.data.chat.ChatSession
 import java.text.CollationKey
 
 sealed class AppModel : Comparable<AppModel> {
@@ -39,7 +40,7 @@ sealed class AppModel : Comparable<AppModel> {
     }
 
     data class ChatSessionModel(
-        val session: app.olauncher.data.chat.ChatSession,
+        val session: ChatSession,
         override val appLabel: String = session.name,
         override val key: CollationKey? = null,
         override val appPackage: String = "",

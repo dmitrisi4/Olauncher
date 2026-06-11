@@ -992,6 +992,15 @@
                         android:paddingVertical="8dp" />
 
                     <EditText
+                        android:id="@+id/etSshPassword"
+                        style="@style/TextSmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/ssh_password"
+                        android:inputType="textPassword"
+                        android:paddingVertical="8dp" />
+
+                    <EditText
                         android:id="@+id/etSshKey"
                         style="@style/TextSmall"
                         android:layout_width="match_parent"

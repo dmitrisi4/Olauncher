@@ -14,6 +14,7 @@ class Prefs(context: Context) {
     private val SSH_PORT = "SSH_PORT"
     private val SSH_USER = "SSH_USER"
     private val SSH_KEY = "SSH_KEY"
+    private val SSH_PASSWORD = "SSH_PASSWORD"
 
     private val FIRST_OPEN = "FIRST_OPEN"
     private val FIRST_OPEN_TIME = "FIRST_OPEN_TIME"
@@ -212,6 +213,10 @@ class Prefs(context: Context) {
     var sshKey: String
         get() = prefs.getString(SSH_KEY, "").toString()
         set(value) = prefs.edit { putString(SSH_KEY, value) }
+
+    var sshPassword: String
+        get() = prefs.getString(SSH_PASSWORD, "").toString()
+        set(value) = prefs.edit { putString(SSH_PASSWORD, value) }
 
     var swipeRightEnabled: Boolean
         get() = prefs.getBoolean(SWIPE_RIGHT_ENABLED, true)

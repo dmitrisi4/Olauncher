@@ -96,12 +96,14 @@ class SettingsFragment : Fragment(), View.OnClickListener, View.OnLongClickListe
         binding.etSshHost?.setText(prefs.sshHost)
         binding.etSshPort?.setText(prefs.sshPort)
         binding.etSshUser?.setText(prefs.sshUser)
+        binding.etSshPassword?.setText(prefs.sshPassword)
         binding.etSshKey?.setText(prefs.sshKey)
 
         binding.etGeminiApiKey?.doAfterTextChanged { prefs.geminiApiKey = it.toString().trim() }
         binding.etSshHost?.doAfterTextChanged { prefs.sshHost = it.toString().trim() }
         binding.etSshPort?.doAfterTextChanged { prefs.sshPort = it.toString().trim() }
         binding.etSshUser?.doAfterTextChanged { prefs.sshUser = it.toString().trim() }
+        binding.etSshPassword?.doAfterTextChanged { prefs.sshPassword = it.toString() }
         binding.etSshKey?.doAfterTextChanged { prefs.sshKey = it.toString().trim() }
     }
 

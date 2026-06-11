@@ -12,17 +12,20 @@ import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import app.olauncher.R
+import app.olauncher.data.Constants
 import app.olauncher.data.Prefs
 import app.olauncher.data.chat.ChatMessage
 import app.olauncher.data.chat.ChatRepository
 import app.olauncher.data.chat.ChatSession
 import app.olauncher.helper.hideKeyboard
-import app.olauncher.helper.showToast
+import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -38,6 +41,7 @@ class ChatFragment : Fragment() {
     private var sessionId: String? = null
     private var sessionType: String? = null
     private var sessionName: String? = null
+    private var requestInFlight = false
 
     private lateinit var chatRecyclerView: RecyclerView
     private lateinit var chatInput: EditText
@@ -69,7 +73,7 @@ class ChatFragment : Fragment() {
             return
         }
 
-        chatTitle.text = sessionName ?: "Chat"
+        chatTitle.text = sessionName ?: getString(R.string.chat_title)
 
         if (sessionId != null && !sessionId!!.startsWith("new_")) {
             session = chatRepository.getSession(sessionId!!) ?: createNewSession()
@@ -101,6 +105,8 @@ class ChatFragment : Fragment() {
     }
 
     private fun sendMessage(text: String) {
+        if (requestInFlight) return
+
         val userMsg = ChatMessage("user", text)
         session.messages.add(userMsg)
         adapter.addMessage(userMsg)
@@ -117,146 +123,183 @@ class ChatFragment : Fragment() {
 
         chatRepository.saveSession(session)
 
-        if (sessionType == "ai") {
-            sendAiRequest(text)
-        } else if (sessionType == "ssh") {
-            sendSshRequest(text)
+        when (sessionType) {
+            Constants.Chat.TYPE_AI -> sendAiRequest()
+            Constants.Chat.TYPE_SSH -> sendSshRequest(text)
         }
     }
 
-    private fun sendAiRequest(prompt: String) {
+    private fun setSending(sending: Boolean) {
+        requestInFlight = sending
+        chatSend.isEnabled = !sending
+        chatSend.text = getString(if (sending) R.string.chat_sending else R.string.chat_send)
+    }
+
+    private fun sendAiRequest() {
         val apiKey = prefs.geminiApiKey
         if (apiKey.isEmpty()) {
             addSystemMessage("Error: Gemini API Key is missing. Please configure it in settings.")
             return
         }
 
+        setSending(true)
         lifecycleScope.launch(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
             try {
-                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$apiKey")
-                val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.doOutput = true
-
-                // Build simple context from last few messages
-                val contents = org.json.JSONArray()
-
-                // Get up to 10 latest messages, excluding system messages
-                val history = session.messages.filter { it.sender != "system" }.takeLast(10)
-
-                var lastRole = ""
-                for (msg in history) {
-                    val role = if (msg.sender == "user") "user" else "model"
-
-                    // Gemini requires alternating roles, starting with user
-                    if (role == lastRole) {
-                        continue // Skip adjacent messages of the same role for simplicity
-                    }
-                    lastRole = role
-
-                    val parts = org.json.JSONArray()
-                    parts.put(JSONObject().put("text", msg.text))
-
-                    val content = JSONObject()
-                    content.put("role", role)
-                    content.put("parts", parts)
-
-                    contents.put(content)
+                val url = URL(Constants.Chat.GEMINI_ENDPOINT)
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("x-goog-api-key", apiKey)
+                    doOutput = true
                 }
 
-                val body = JSONObject().put("contents", contents).toString()
-
+                val body = JSONObject().put("contents", buildAiContext()).toString()
                 connection.outputStream.use { os ->
-                    val input = body.toByteArray(Charsets.UTF_8)
-                    os.write(input, 0, input.size)
+                    os.write(body.toByteArray(Charsets.UTF_8))
                 }
 
                 val responseCode = connection.responseCode
                 if (responseCode == HttpURLConnection.HTTP_OK) {
-                    val reader = InputStreamReader(connection.inputStream, Charsets.UTF_8)
-                    val responseStr = reader.readText()
-                    val responseJson = JSONObject(responseStr)
-
-                    val text = responseJson.getJSONArray("candidates")
+                    val responseStr = InputStreamReader(connection.inputStream, Charsets.UTF_8).use { it.readText() }
+                    val text = JSONObject(responseStr)
+                        .getJSONArray("candidates")
                         .getJSONObject(0)
                         .getJSONObject("content")
                         .getJSONArray("parts")
                         .getJSONObject(0)
                         .getString("text")
 
-                    withContext(Dispatchers.Main) {
-                        addAiMessage(text)
-                    }
+                    withContext(Dispatchers.Main) { addAiMessage(text) }
                 } else {
-                    withContext(Dispatchers.Main) {
-                        addSystemMessage("Error: HTTP $responseCode")
+                    val errorBody = connection.errorStream?.let {
+                        InputStreamReader(it, Charsets.UTF_8).use { reader -> reader.readText() }
                     }
+                    val message = parseApiError(errorBody) ?: "HTTP $responseCode"
+                    withContext(Dispatchers.Main) { addSystemMessage("Error: $message") }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    addSystemMessage("Error: ${e.message}")
-                }
+                withContext(Dispatchers.Main) { addSystemMessage("Error: ${e.message}") }
+            } finally {
+                connection?.disconnect()
+                withContext(Dispatchers.Main) { setSending(false) }
             }
+        }
+    }
+
+    /**
+     * Builds Gemini contents with alternating user/model roles. Consecutive
+     * messages from the same role are merged (rather than dropped) so the latest
+     * user prompt is always included, and any leading model turns are trimmed
+     * because Gemini requires the conversation to start with a user turn.
+     */
+    private fun buildAiContext(): JSONArray {
+        val raw = session.messages
+            .filter { it.sender != "system" }
+            .takeLast(Constants.Chat.HISTORY_CONTEXT_LIMIT)
+
+        val merged = mutableListOf<Pair<String, String>>()
+        for (msg in raw) {
+            val role = if (msg.sender == "user") "user" else "model"
+            val last = merged.lastOrNull()
+            if (last != null && last.first == role) {
+                merged[merged.size - 1] = role to (last.second + "\n" + msg.text)
+            } else {
+                merged.add(role to msg.text)
+            }
+        }
+        while (merged.isNotEmpty() && merged.first().first == "model") {
+            merged.removeAt(0)
+        }
+
+        val contents = JSONArray()
+        for ((role, text) in merged) {
+            val parts = JSONArray().put(JSONObject().put("text", text))
+            contents.put(JSONObject().put("role", role).put("parts", parts))
+        }
+        return contents
+    }
+
+    private fun parseApiError(body: String?): String? {
+        if (body.isNullOrEmpty()) return null
+        return try {
+            JSONObject(body).getJSONObject("error").getString("message")
+        } catch (e: Exception) {
+            null
         }
     }
 
     private fun sendSshRequest(command: String) {
         val host = prefs.sshHost
-        val port = prefs.sshPort.toIntOrNull() ?: 22
+        val port = prefs.sshPort.toIntOrNull() ?: Constants.Chat.SSH_DEFAULT_PORT
         val user = prefs.sshUser
         val key = prefs.sshKey
+        val password = prefs.sshPassword
 
         if (host.isEmpty() || user.isEmpty()) {
             addSystemMessage("Error: SSH Host or User is missing. Please configure in settings.")
             return
         }
+        if (key.isEmpty() && password.isEmpty()) {
+            addSystemMessage("Error: SSH key or password is missing. Please configure in settings.")
+            return
+        }
 
+        setSending(true)
         lifecycleScope.launch(Dispatchers.IO) {
+            var sshSession: com.jcraft.jsch.Session? = null
+            var channel: ChannelExec? = null
             try {
                 val jsch = JSch()
-
                 if (key.isNotEmpty()) {
                     jsch.addIdentity("user_key", key.toByteArray(), null, null)
                 }
 
-                val session = jsch.getSession(user, host, port)
-                session.setConfig("StrictHostKeyChecking", "no")
+                sshSession = jsch.getSession(user, host, port)
+                if (password.isNotEmpty()) sshSession.setPassword(password)
+                sshSession.setConfig("StrictHostKeyChecking", "no")
+                sshSession.connect(Constants.Chat.SSH_TIMEOUT_MS)
 
-                // Connect with short timeout
-                session.connect(5000)
-
-                val channel = session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+                channel = sshSession.openChannel("exec") as ChannelExec
                 channel.setCommand(command)
                 channel.inputStream = null
-                val errStream = channel.getErrStream()
-                val inStream = channel.getInputStream()
 
-                channel.connect(5000)
+                val errStream = ByteArrayOutputStream()
+                channel.setErrStream(errStream)
+                val inStream = channel.inputStream
 
-                val reader = InputStreamReader(inStream, Charsets.UTF_8)
-                val errReader = InputStreamReader(errStream, Charsets.UTF_8)
+                channel.connect(Constants.Chat.SSH_TIMEOUT_MS)
 
+                // Drain stdout while the command runs; stderr is pumped into errStream
+                // by JSch so reading only stdout here cannot deadlock.
                 val output = StringBuilder()
-                var c: Int
-                while (reader.read().also { c = it } != -1) {
-                    output.append(c.toChar())
-                }
-                while (errReader.read().also { c = it } != -1) {
-                    output.append(c.toChar())
+                val buffer = ByteArray(1024)
+                while (true) {
+                    while (inStream.available() > 0) {
+                        val read = inStream.read(buffer, 0, buffer.size)
+                        if (read < 0) break
+                        output.append(String(buffer, 0, read, Charsets.UTF_8))
+                    }
+                    if (channel.isClosed) {
+                        if (inStream.available() > 0) continue
+                        break
+                    }
+                    Thread.sleep(100)
                 }
 
-                channel.disconnect()
-                session.disconnect()
+                val errText = errStream.toString("UTF-8")
+                if (errText.isNotEmpty()) output.append(errText)
+                val exitStatus = channel.exitStatus
+                if (exitStatus > 0) output.append("\n[exit code $exitStatus]")
 
-                withContext(Dispatchers.Main) {
-                    addSystemMessage(output.toString().trim())
-                }
-
+                val result = output.toString().trim().ifEmpty { "[no output]" }
+                withContext(Dispatchers.Main) { addSystemMessage(result) }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    addSystemMessage("SSH Error: ${e.message}")
-                }
+                withContext(Dispatchers.Main) { addSystemMessage("SSH Error: ${e.message}") }
+            } finally {
+                channel?.disconnect()
+                sshSession?.disconnect()
+                withContext(Dispatchers.Main) { setSending(false) }
             }
         }
     }
