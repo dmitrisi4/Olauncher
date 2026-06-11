@@ -16,3 +16,8 @@
 .externalNativeBuild
 .cxx
 google-services.json
+
+# Merge / patch artifacts
+*.orig
+*.rej
+/patch_*.diff
